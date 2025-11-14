@@ -1,60 +1,74 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Tetris Widget</title>
 <style>
-  html, body {
-    height: 100%;
-    margin: 0;
-    background: #ffe8f5;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    overflow: hidden;
-    font-family: "Segoe UI", sans-serif;
+  :root{
+    --bg:#ffe8f5; --panel:#1e1e1e; --accent:#ff89d9; --pink:#ff00aa;
   }
-  #container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
+  html,body{height:100%;margin:0;background:var(--bg);display:flex;align-items:center;justify-content:center;font-family:Segoe UI,system-ui,Arial;}
+  #wrap{position:relative;display:flex;flex-direction:column;align-items:center;}
+  canvas{background:var(--panel);border:5px solid var(--accent);box-shadow:0 0 15px var(--accent);image-rendering:pixelated;display:block;}
+  #scoreBox{position:absolute;right:-170px;top:0;width:150px;padding:10px;background:transparent;color:var(--pink);font-weight:700;text-align:center;pointer-events:none;}
+  #widgetOverlay{
+    position:absolute;left:0;top:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;
+    color:#fff;font-weight:700;font-size:20px;text-shadow:0 0 6px rgba(0,0,0,.7);
+    pointer-events:auto; /* used for clicks */
+    background:linear-gradient(180deg, rgba(0,0,0,0.0) 0%, rgba(0,0,0,0.08) 100%);
   }
-  canvas {
-    background: #1e1e1e;
-    border: 5px solid #ff89d9;
-    box-shadow: 0 0 15px #ff89d9;
-    image-rendering: pixelated;
-  }
-  #score {
-    color: #ff00aa;
-    font-size: 1.2rem;
-    font-weight: bold;
-    margin-top: 10px;
-  }
+  #widgetHint{background:rgba(0,0,0,.35);padding:8px 12px;border-radius:8px;}
+  #menu { position:absolute; left:-170px; top:120px; width:150px; text-align:center; color:var(--pink); pointer-events:none; }
+  #high{font-size:14px}
+  /* small screen adjust */
+  @media(max-width:900px){ #scoreBox{display:none} canvas{width:240px;height:480px} }
 </style>
 </head>
 <body>
-<div id="container">
-  <canvas id="game" width="320" height="640"></canvas>
-  <div id="score">Score: 0</div>
-</div>
+  <div id="wrap">
+    <canvas id="game" width="320" height="640"></canvas>
+    <div id="scoreBox">Score: <span id="score">0</span><div id="status" style="font-size:12px;color:#ffd3f0;margin-top:6px;"></div></div>
+
+    <div id="menu">
+      <div id="high">High: <span id="highScore">0</span></div>
+    </div>
+
+    <!-- This overlay is visible in widget mode. Click canvas to play -->
+    <div id="widgetOverlay" style="display:flex;pointer-events:none;">
+      <div id="widgetHint">Click to Play</div>
+    </div>
+  </div>
 
 <script>
-const canvas = document.getElementById("game");
-const ctx = canvas.getContext("2d");
-const scoreEl = document.getElementById("score");
-
+/* ---------- CONFIG ---------- */
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 const ROWS = 20, COLS = 10, BLOCK = 32;
 const colors = ["#ff05d1","#ff70cd","#ff69ca","#f440a3","#ff007b","#ff51cb","#ff0048","#e25587","#ff309b"];
+/* ---------- UI ---------- */
+const scoreEl = document.getElementById('score');
+const highEl = document.getElementById('highScore');
+const widgetOverlay = document.getElementById('widgetOverlay');
+const statusEl = document.getElementById('status');
 
-let arena = Array.from({length: ROWS}, () => Array(COLS).fill(0));
-let score = 0;
-let dropInterval = 800;
+let highScore = parseInt(localStorage.getItem('tetris_high') || '0', 10);
+highEl.textContent = highScore;
+
+/* ---------- GAME STATE ---------- */
+let arena = createMatrix(ROWS, COLS);
+let piece = null;
+let dropInterval = 800;      // play mode base
+let passiveInterval = 1400;  // widget mode base (slower)
 let dropCounter = 0;
 let lastTime = 0;
 let downPressed = false;
 
+let mode = 'widget'; // 'widget' or 'play'
+let score = 0;
+let running = true;
+
+/* ---------- PIECES ---------- */
 const pieces = {
   T: [[1,1,1],[0,1,0]],
   O: [[2,2],[2,2]],
@@ -66,35 +80,28 @@ const pieces = {
 };
 const keys = Object.keys(pieces);
 
-function randomPiece() {
-  const type = keys[Math.floor(Math.random()*keys.length)];
-  return {matrix: pieces[type], pos: {x:3, y:0}, color: colors[Math.floor(Math.random()*colors.length)]};
+/* ---------- HELPERS ---------- */
+function createMatrix(rows, cols){
+  return Array.from({length:rows}, ()=>Array(cols).fill(0));
 }
-
-let piece = randomPiece();
-
-function collide(arena, piece) {
-  const [m, o] = [piece.matrix, piece.pos];
-  for (let y=0; y<m.length; ++y)
-    for (let x=0; x<m[y].length; ++x)
-      if (m[y][x] && (arena[y+o.y] && arena[y+o.y][x+o.x]) !== 0)
-        return true;
+function randPiece(){
+  const t = keys[Math.floor(Math.random()*keys.length)];
+  return {matrix: pieces[t].map(r=>r.slice()), pos:{x: Math.floor((COLS - pieces[t][0].length)/2), y:0}, color: colors[Math.floor(Math.random()*colors.length)]};
+}
+function collide(arena, piece){
+  const m = piece.matrix, o = piece.pos;
+  for(let y=0;y<m.length;y++) for(let x=0;x<m[y].length;x++){
+    if(m[y][x] && (arena[y+o.y] && arena[y+o.y][x+o.x]) !== 0) return true;
+  }
   return false;
 }
-
-function merge(arena, piece) {
-  piece.matrix.forEach((row,y)=>{
-    row.forEach((v,x)=>{
-      if(v) arena[y+piece.pos.y][x+piece.pos.x] = piece.color;
-    });
-  });
+function merge(arena, piece){
+  piece.matrix.forEach((row,y)=> row.forEach((v,x)=>{ if(v) arena[y+piece.pos.y][x+piece.pos.x] = piece.color; }));
 }
-
-function rotate(matrix) {
-  return matrix[0].map((_, i) => matrix.map(row => row[i])).reverse();
+function rotate(m){
+  return m[0].map((_,i)=>m.map(row=>row[i])).reverse();
 }
-
-function sweep() {
+function sweep(coreMode){
   let lines = 0;
   for(let y=arena.length-1;y>=0;y--){
     if(arena[y].every(v=>v)){
@@ -103,97 +110,140 @@ function sweep() {
       lines++;
     }
   }
-  if (lines > 0) {
-    score += lines * 100;
-    scoreEl.textContent = "Score: " + score;
+  if(lines > 0 && coreMode === 'play'){
+    // scoring only in play mode
+    score += [0,100,300,700,1500][lines] || lines*100;
+    scoreEl.textContent = score;
   }
 }
 
-function drawMatrix(matrix, offset, color) {
-  matrix.forEach((row,y)=>{
-    row.forEach((v,x)=>{
-      if(v){
-        ctx.fillStyle = color;
-        ctx.fillRect((x+offset.x)*BLOCK,(y+offset.y)*BLOCK,BLOCK-1,BLOCK-1);
-      }
-    });
-  });
+/* ---------- DRAW ---------- */
+function drawMatrix(matrix, offset, color){
+  matrix.forEach((row,y)=> row.forEach((v,x)=>{ if(v){ ctx.fillStyle = color; ctx.fillRect((x+offset.x)*BLOCK,(y+offset.y)*BLOCK,BLOCK-1,BLOCK-1); }}));
 }
-
-function draw() {
-  ctx.fillStyle="#111";
+function draw(){
+  ctx.fillStyle = '#111';
   ctx.fillRect(0,0,canvas.width,canvas.height);
-  arena.forEach((row,y)=>row.forEach((val,x)=>{
-    if(val){
-      ctx.fillStyle=val;
-      ctx.fillRect(x*BLOCK,y*BLOCK,BLOCK-1,BLOCK-1);
-    }
-  }));
-  drawMatrix(piece.matrix, piece.pos, piece.color);
+  // field
+  arena.forEach((row,y)=> row.forEach((val,x)=>{ if(val){ ctx.fillStyle = val; ctx.fillRect(x*BLOCK,y*BLOCK,BLOCK-1,BLOCK-1); }}));
+  // piece
+  if(piece) drawMatrix(piece.matrix, piece.pos, piece.color);
 }
 
-function drop() {
+/* ---------- MOVE & DROP ---------- */
+function drop(coreMode){
   piece.pos.y++;
-  if (collide(arena, piece)) {
+  if(collide(arena,piece)){
     piece.pos.y--;
-    merge(arena, piece);
-    sweep();
-    piece = randomPiece();
-    if (collide(arena, piece)) {
-      arena = Array.from({length: ROWS}, () => Array(COLS).fill(0));
-      score = 0;
-      scoreEl.textContent = "Score: 0";
+    merge(arena,piece);
+    sweep(coreMode);
+    piece = randPiece();
+    if(collide(arena,piece)){
+      // game over only meaningful in play mode
+      if(coreMode === 'play'){
+        endPlay();
+        return;
+      } else {
+        // in widget mode, reset arena gently
+        arena = createMatrix(ROWS,COLS);
+      }
     }
   }
   dropCounter = 0;
 }
 
-function hardDrop() {
-  while (!collide(arena, piece)) {
+function hardDrop(coreMode){
+  while(!collide(arena,piece)){
     piece.pos.y++;
   }
   piece.pos.y--;
-  merge(arena, piece);
-  sweep();
-  piece = randomPiece();
-  if (collide(arena, piece)) {
-    arena = Array.from({length: ROWS}, () => Array(COLS).fill(0));
-    score = 0;
-    scoreEl.textContent = "Score: 0";
+  merge(arena,piece);
+  sweep(coreMode);
+  piece = randPiece();
+  if(collide(arena,piece)){
+    if(coreMode === 'play'){ endPlay(); return; } else { arena = createMatrix(ROWS,COLS); }
   }
 }
 
-function update(time = 0) {
+/* ---------- GAME LOOP ---------- */
+function update(time=0){
+  if(!running) return;
   const delta = time - lastTime;
   lastTime = time;
   dropCounter += delta;
-  if (dropCounter > (downPressed ? dropInterval / 8 : dropInterval)) drop();
+  const interval = (mode === 'play') ? dropInterval : passiveInterval;
+  if(dropCounter > (downPressed && mode==='play' ? interval/8 : interval)) drop(mode);
   draw();
   requestAnimationFrame(update);
 }
 update();
 
-document.addEventListener("keydown", e => {
-  if (e.key === "ArrowLeft") {
-    piece.pos.x--;
-    if (collide(arena, piece)) piece.pos.x++;
-  }
-  if (e.key === "ArrowRight") {
-    piece.pos.x++;
-    if (collide(arena, piece)) piece.pos.x--;
-  }
-  if (e.key === "ArrowDown") downPressed = true;
-  if (e.key === "ArrowUp") {
-    const rotated = rotate(piece.matrix);
-    const old = piece.matrix;
-    piece.matrix = rotated;
-    if (collide(arena, piece)) piece.matrix = old;
-  }
-  if (e.code === "Space") hardDrop();
+/* ---------- INPUT ---------- */
+document.addEventListener('keydown', e=>{
+  if(mode !== 'play') return; // ignore input unless playing
+  if(e.key === 'ArrowLeft'){ piece.pos.x--; if(collide(arena,piece)) piece.pos.x++; }
+  if(e.key === 'ArrowRight'){ piece.pos.x++; if(collide(arena,piece)) piece.pos.x--; }
+  if(e.key === 'ArrowDown') downPressed = true;
+  if(e.key === 'ArrowUp'){ const r = rotate(piece.matrix); const old = piece.matrix; piece.matrix = r; if(collide(arena,piece)) piece.matrix = old; }
+  if(e.code === 'Space') hardDrop('play');
+  if(e.key === 'r' || e.key === 'R'){ if(mode==='play') startPlay(); }
 });
-document.addEventListener("keyup", e => {
-  if (e.key === "ArrowDown") downPressed = false;
+document.addEventListener('keyup', e=>{ if(e.key === 'ArrowDown') downPressed = false; });
+
+/* ---------- MODE CONTROL ---------- */
+canvas.addEventListener('click', ()=>{
+  if(mode === 'widget'){ startPlay(); }
 });
+
+function startPlay(){
+  // enter play mode: reset score and arena, enable inputs
+  mode = 'play';
+  widgetOverlay.style.pointerEvents = 'none';
+  widgetOverlay.style.display = 'none';
+  score = 0;
+  scoreEl.textContent = '0';
+  statusEl.textContent = 'PLAY';
+  arena = createMatrix(ROWS,COLS);
+  piece = randPiece();
+  dropCounter = 0;
+  lastTime = performance.now();
+}
+
+function endPlay(){
+  // save high score
+  if(score > highScore) { highScore = score; localStorage.setItem('tetris_high', highScore); highEl.textContent = highScore; }
+  // show brief game over status then go back to widget
+  statusEl.textContent = 'GAME OVER';
+  setTimeout(()=>{ goWidgetMode(); }, 900);
+}
+
+function goWidgetMode(){
+  mode = 'widget';
+  widgetOverlay.style.display = 'flex';
+  widgetOverlay.style.pointerEvents = 'auto';
+  statusEl.textContent = 'IDLE';
+  // start a passive scene: clear and spawn random piece, let it fall
+  arena = createMatrix(ROWS,COLS);
+  piece = randPiece();
+  dropCounter = 0;
+  lastTime = performance.now();
+}
+
+/* ---------- INIT ---------- */
+function init(){
+  // initial passive start
+  highEl.textContent = highScore;
+  goWidgetMode();
+}
+init();
+
+/* ---------- optional UI toggles for debugging ---------- */
+// show mode in small on-screen status (scoreBox status)
+(function animateStatus(){
+  requestAnimationFrame(animateStatus);
+  // status is already set; could add fps or other info later
+})();
+
 </script>
 </body>
 </html>
