@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Tetris — Simple</title>
+<title>Tetris — Simple Working</title>
 <style>
   :root{
-    --pink:#ff89d9;
-    --accent:#ff00aa;
-    --panel-dark:#1e1e1e;
-    --bg-light:#ffffff;
-    --bg-dark:#0b0b0b;
+    --pink: #ff89d9;
+    --accent: #ff00aa;
+    --panel-dark: #1e1e1e;
+    --panel-light: #f6f6f6;
+    --bg-dark: #0b0b0b;
+    --bg-light: #ffffff;
   }
   html,body{
     height:100%;
@@ -18,14 +19,15 @@
     display:flex;
     align-items:center;
     justify-content:center;
-    font-family: "Segoe UI", system-ui, Arial;
     background: var(--bg-dark);
+    font-family: "Segoe UI", system-ui, Arial;
   }
   #wrap{
     display:flex;
     flex-direction:column;
     align-items:center;
     gap:8px;
+    padding:12px;
   }
   canvas{
     width:320px; height:640px;
@@ -33,7 +35,7 @@
     border:5px solid var(--pink);
     box-shadow:0 0 18px var(--pink);
     image-rendering: pixelated;
-    outline: none;
+    outline:none;
   }
   #ui{
     display:flex;
@@ -45,7 +47,6 @@
     font-weight:700;
     text-align:center;
   }
-  #controls{ display:flex; gap:8px; align-items:center; }
   button{
     padding:6px 10px;
     border-radius:8px;
@@ -56,14 +57,14 @@
     font-weight:700;
   }
   button:active{ transform: translateY(1px); }
-  @media (max-width:480px){
+  @media(max-width:480px){
     canvas{ width:240px; height:480px; }
   }
 </style>
 </head>
 <body>
   <div id="wrap">
-    <canvas id="game" width="320" height="640" tabindex="0"></canvas>
+    <canvas id="game" width="320" height="640" tabindex="0" aria-label="Tetris game"></canvas>
 
     <div id="ui">
       <div id="scoreBox">
@@ -83,15 +84,15 @@
   </div>
 
 <script>
-/* ===== CONFIG ===== */
+/* ---------- SIMPLE TETRIS (stable) ---------- */
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
-const ROWS = 20, COLS = 10, BLOCK = 32;
 const scoreEl = document.getElementById('score');
 const highEl = document.getElementById('high');
 const resetBtn = document.getElementById('resetBtn');
 const lightsBtn = document.getElementById('lightsBtn');
 
+const ROWS = 20, COLS = 10, BLOCK = 32;
 const colors = ["#ff05d1","#ff70cd","#ff69ca","#f440a3","#ff007b","#ff51cb","#ff0048","#e25587","#ff309b"];
 const pieces = {
   T: [[1,1,1],[0,1,0]],
@@ -104,23 +105,24 @@ const pieces = {
 };
 const pieceKeys = Object.keys(pieces);
 
-/* ===== STATE ===== */
-let arena, piece, nextPiece;
+/* state */
+let arena = createMatrix(ROWS,COLS);
+let piece = null;
+let nextPiece = null;
 let score = 0;
 let dropInterval = 700;
 let dropCounter = 0;
 let lastTime = 0;
 let downPressed = false;
-
-/* high score */
 let highScore = parseInt(localStorage.getItem('tetris_high') || '0', 10);
 highEl.textContent = highScore;
 
-/* ===== HELPERS ===== */
+/* helpers */
 function createMatrix(r,c){ return Array.from({length:r}, ()=>Array(c).fill(0)); }
+function clone(m){ return m.map(row=>row.slice()); }
 function randPiece(){
   const t = pieceKeys[Math.floor(Math.random()*pieceKeys.length)];
-  return { matrix: pieces[t].map(r=>r.slice()), pos:{x:3,y:0}, color: colors[Math.floor(Math.random()*colors.length)] };
+  return { type: t, matrix: pieces[t].map(r=>r.slice()), pos:{x: Math.floor((COLS - pieces[t][0].length)/2), y:0}, color: colors[Math.floor(Math.random()*colors.length)] };
 }
 function collide(arena, piece){
   const m = piece.matrix, o = piece.pos;
@@ -150,50 +152,43 @@ function sweep(){
   }
 }
 
-/* ===== DRAW ===== */
+/* drawing */
 function drawMatrix(matrix, ox, oy, blockSize, color){
   matrix.forEach((row,y)=> row.forEach((v,x)=> { if(v){ ctx.fillStyle=color; ctx.fillRect(ox + x*blockSize, oy + y*blockSize, blockSize-1, blockSize-1); }}));
 }
 function draw(){
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--panel-dark').trim() || '#111';
+  // fill background (panel)
+  const panel = getComputedStyle(document.documentElement).getPropertyValue('--panel-dark')?.trim() || '#1e1e1e';
+  ctx.fillStyle = panel;
   ctx.fillRect(0,0,canvas.width,canvas.height);
 
-  // draw grid / field
-  arena.forEach((row,y)=> row.forEach((val,x)=>{
+  // draw arena cells
+  arena.forEach((row,y)=> row.forEach((val,x)=> {
     if(val){
       ctx.fillStyle = val;
       ctx.fillRect(x*BLOCK, y*BLOCK, BLOCK-1, BLOCK-1);
     } else {
-      // subtle grid lines
-      ctx.strokeStyle = "rgba(255,255,255,0.03)";
+      // faint grid
+      ctx.strokeStyle = 'rgba(255,255,255,0.03)';
       ctx.strokeRect(x*BLOCK, y*BLOCK, BLOCK, BLOCK);
     }
   }));
 
-  // draw piece
+  // draw current piece
   if(piece) drawMatrix(piece.matrix, piece.pos.x*BLOCK, piece.pos.y*BLOCK, BLOCK, piece.color);
 }
 
-/* ===== GAME LOGIC ===== */
-function resetGame(){
-  arena = createMatrix(ROWS, COLS);
-  score = 0;
-  scoreEl.textContent = '0';
-  piece = randPiece();
-  nextPiece = randPiece();
-  dropCounter = 0;
-  lastTime = performance.now();
-}
+/* game loop */
 function drop(){
   piece.pos.y++;
-  if(collide(arena, piece)){
+  if(collide(arena,piece)){
     piece.pos.y--;
-    merge(arena, piece);
+    merge(arena,piece);
     sweep();
     piece = nextPiece || randPiece();
     nextPiece = randPiece();
-    if(collide(arena, piece)){
-      // game over: reset and update high score
+    if(collide(arena,piece)){
+      // game over: update highscore, reset
       highScore = Math.max(highScore, score);
       localStorage.setItem('tetris_high', highScore);
       highEl.textContent = highScore;
@@ -203,15 +198,13 @@ function drop(){
   dropCounter = 0;
 }
 function hardDrop(){
-  while(!collide(arena, piece)) piece.pos.y++;
+  while(!collide(arena,piece)) piece.pos.y++;
   piece.pos.y--;
-  merge(arena, piece);
+  merge(arena,piece);
   sweep();
   piece = nextPiece || randPiece();
   nextPiece = randPiece();
 }
-
-/* ===== LOOP ===== */
 function update(time=0){
   const delta = time - lastTime;
   lastTime = time;
@@ -220,10 +213,10 @@ function update(time=0){
   draw();
   requestAnimationFrame(update);
 }
-update();
 
-/* ===== INPUT ===== */
+/* input */
 canvas.addEventListener('click', ()=> canvas.focus());
+canvas.addEventListener('touchstart', ()=> canvas.focus());
 canvas.focus();
 
 document.addEventListener('keydown', e=>{
@@ -236,31 +229,34 @@ document.addEventListener('keydown', e=>{
 });
 document.addEventListener('keyup', e=>{ if(e.key === 'ArrowDown') downPressed = false; });
 
-/* ===== UI BUTTONS ===== */
-resetBtn.addEventListener('click', ()=> {
-  resetGame();
-  canvas.focus();
-});
+/* UI controls */
+resetBtn.addEventListener('click', ()=> { resetGame(); canvas.focus(); });
 let lightsOn = false;
 lightsBtn.addEventListener('click', ()=> {
   lightsOn = !lightsOn;
   if(lightsOn){
-    document.documentElement.style.setProperty('--bg-color','white');
     document.body.style.background = 'var(--bg-light)';
+    canvas.style.background = 'var(--panel-light)';
     lightsBtn.textContent = 'Lights Off';
-    // when lights on, make canvas background lighter
-    document.documentElement.style.setProperty('--panel-dark','#f6f6f6');
   } else {
     document.body.style.background = 'var(--bg-dark)';
+    canvas.style.background = 'var(--panel-dark)';
     lightsBtn.textContent = 'Lights On';
-    document.documentElement.style.setProperty('--panel-dark','#1e1e1e');
   }
 });
 
-/* ===== INIT ===== */
+/* init/reset */
+function resetGame(){
+  arena = createMatrix(ROWS,COLS);
+  piece = randPiece();
+  nextPiece = randPiece();
+  score = 0;
+  scoreEl.textContent = '0';
+  dropCounter = 0;
+  lastTime = performance.now();
+}
 resetGame();
-highEl.textContent = highScore;
-scoreEl.textContent = '0';
+update();
 </script>
 </body>
 </html>
